@@ -1,0 +1,12 @@
+# 核心（代理模型训练即可运行）
+numpy>=1.24
+scipy>=1.10
+pyyaml>=6.0
+gymnasium>=0.29
+stable-baselines3>=2.3
+torch>=2.1
+matplotlib>=3.7
+pytest>=7.0
+
+# Fluent 耦合（需要本机安装 Ansys Fluent 2024R2+）
+# ansys-fluent-core>=0.26

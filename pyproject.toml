@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "airfoil-rl"
+version = "0.1.0"
+description = "Deep reinforcement learning + Ansys Fluent for airfoil lift stabilization (gust load alleviation)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "pyyaml>=6.0",
+  "gymnasium>=0.29",
+  "stable-baselines3>=2.3",
+  "torch>=2.1",
+  "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+fluent = ["ansys-fluent-core>=0.26"]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools]
+packages = ["airfoil_rl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::UserWarning:gymnasium.*"]

@@ -1,0 +1,57 @@
+# Fluent 在线训练 / 微调配置。与 surrogate.yaml 的 flow/control/obs 必须一致，策略才能直接迁移。
+seed: 1
+backend: fluent
+
+flow:
+  chord: 0.2
+  u_inf: 15.0
+  alpha0_deg: 6.0
+
+control:
+  dt_cfd: 4.0e-4
+  n_substeps: 5
+  episode_steps: 200
+  action_smoothing: 0.5
+
+reward:
+  cl_scale: 0.1
+  w_cl: 1.0
+  w_u: 0.02
+  w_du: 0.1
+
+obs:
+  n_hist: 6
+  include_cd: true
+  include_gust_sensor: true
+  n_gust_hist: 3
+  n_u_hist: 3          # 执行器指令历史（延迟系统需要）
+  include_err_ema: true # 升力误差滑动平均（积分作用）
+  include_probes: false   # 改为 true 时需同时填写 fluent.probe_reports，且不能直接加载代理模型策略
+
+fluent:
+  case_file: fluent_case/airfoil_rl.cas.h5
+  init_data_file: fluent_case/airfoil_rl_init.dat.h5
+  meta_file: fluent_case/airfoil_rl_meta.yaml
+  processors: 4            # 每个 Fluent 实例的核数
+  product_version: null    # 例如 "25.1.0"
+  max_iter_per_step: 20
+  workdir: runs/fluent_work
+  # probe_reports: [cp_u1, cp_u2, cp_u3, cp_l1, cp_l2, cp_l3]
+
+train:
+  algo: sac
+  total_timesteps: 30000   # 150 回合；4 个并行实例
+  n_envs: 4
+  vec_env: subproc
+  learning_rate: 5.0e-5    # 微调用较小学习率（预训练为 1e-4）
+  buffer_size: 100000
+  batch_size: 256
+  gamma: 0.95
+  learning_starts: 800     # 从零训练时生效；--init-model 微调时由下面的三段式预热接管
+  finetune_collect_steps: 800   # 阶段1：预训练策略采样（每实例 1 回合），不更新
+  finetune_critic_steps: 2000   # 阶段2：冻结 Actor，只更新 Critic
+  train_freq: 1
+  gradient_steps: 4        # 提高样本利用率（UTD=4/n_envs）
+  eval_freq: 5000
+  n_eval_episodes: 2
+  checkpoint_freq: 2000

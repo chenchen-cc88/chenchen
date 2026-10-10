@@ -1,0 +1,50 @@
+# 代理模型预训练配置（未列出的参数取 airfoil_rl/config.py 中的默认值）
+seed: 0
+backend: surrogate
+
+flow:
+  chord: 0.2          # m
+  u_inf: 15.0         # m/s  -> Re ≈ 2.05e5, c/U = 13.3 ms
+  alpha0_deg: 6.0
+
+control:
+  dt_cfd: 4.0e-4      # 与 Fluent 物理时间步保持一致（≈0.03 c/U）
+  n_substeps: 5       # 控制周期 2 ms ≈ 0.15 c/U
+  episode_steps: 200  # 0.4 s ≈ 30 c/U
+  action_smoothing: 0.5
+
+gust:
+  kinds: [sine, one_minus_cos, dryden, multisine]
+  amp_deg: [1.0, 4.0]
+  reduced_freq: [0.05, 0.4]
+
+reward:
+  cl_scale: 0.1
+  w_cl: 1.0
+  w_u: 0.02
+  w_du: 0.1
+
+obs:
+  n_hist: 6
+  include_cd: true
+  include_gust_sensor: true
+  n_gust_hist: 3
+  n_u_hist: 3          # 执行器指令历史（延迟系统需要）
+  include_err_ema: true # 升力误差滑动平均（积分作用）
+  include_probes: false   # 代理模型没有压力探头；需与 Fluent 微调时的观测维度一致
+
+# surrogate: {}         # 用 scripts/calibrate_surrogate.py 生成的参数覆盖，例如 jet_gain_pos: 0.32
+
+train:
+  algo: sac
+  total_timesteps: 200000
+  n_envs: 4
+  learning_rate: 1.0e-4
+  buffer_size: 300000
+  batch_size: 256
+  gamma: 0.95
+  learning_starts: 2000
+  gradient_steps: 1
+  net_arch: [256, 256]
+  eval_freq: 10000
+  n_eval_episodes: 5
