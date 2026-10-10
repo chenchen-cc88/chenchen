@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# 训练输出
+runs/
+
+# Fluent 文件（体积大，按需生成）
+fluent_case/*.cas*
+fluent_case/*.dat*
+fluent_case/*.msh*
+fluent_case/*.trn
+fluent_case/*.out
+fluent_case/*.npz
+*.trn
+cleanup-fluent-*.bat
+cleanup-fluent-*.sh
