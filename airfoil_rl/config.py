@@ -149,6 +149,9 @@ class TrainConfig:
     n_steps: int = 1024
     ppo_batch_size: int = 256
     n_epochs: int = 10
+    # 迁移微调（--init-model）：先用预训练策略采样、再只更新 Critic、最后正常 SAC 更新，避免空回放池导致策略退化
+    finetune_collect_steps: int = 800  # 只采样不更新的步数（用策略本身而非随机动作）
+    finetune_critic_steps: int = 2_000  # 冻结 Actor、只更新 Critic 的步数
     eval_freq: int = 10_000  # 以总环境步计
     n_eval_episodes: int = 4
     checkpoint_freq: int = 20_000

@@ -93,11 +93,11 @@ def run_episode(env: AirfoilLiftEnv, ctrl: Any, gust: Optional[GustSignal] = Non
         u_old = env.u
         obs, r, term, trunc, info = env.step(np.array([a], dtype=np.float32))
         n = len(info["cl_series"])
-        t0 = t_f[-1]
-        t_f.extend(t0 + dt * np.arange(1, n + 1))
+        t_new = t_f[-1] + dt * np.arange(1, n + 1)
+        t_f.extend(t_new)
         cl_f.extend(info["cl_series"])
         u_f.extend(u_old + (info["u"] - u_old) * np.arange(1, n + 1) / n)
-        ag_f.extend([info["alpha_g_deg"]] * n)
+        ag_f.extend(np.rad2deg([env.gust(t) for t in t_new]) if env.gust is not None else [info["alpha_g_deg"]] * n)
         cds.append(info["cd"])
         rewards.append(r)
         done = term or trunc

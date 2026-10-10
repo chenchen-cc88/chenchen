@@ -96,8 +96,56 @@ def load_model(path: str, algo: str, env=None, device: str = "auto", **overrides
     return cls.load(path, env=env, device=device, **overrides)
 
 
-def make_scenario_callback(cfg: Config, run_dir: str, eval_env: Optional[AirfoilLiftEnv] = None):
-    """在固定阵风工况上评估确定性策略，按平均 Cl RMSE 保存 best_model.zip。"""
+def make_finetune_callback(collect_steps: int, critic_steps: int):
+    """迁移微调的三段式预热（仅用于 SAC/TD3 加载预训练模型时）：
+
+    1. [0, collect_steps)：gradient_steps=0，只用预训练策略（而不是 SB3 默认的均匀随机动作）采样；
+    2. [collect_steps, collect_steps+critic_steps)：恢复梯度更新，但冻结 Actor，只让 Critic 适应新环境；
+    3. 之后：正常更新。
+
+    直接在空回放池上以较高 UTD 更新时，Critic 会在少量新数据上过拟合并把策略带偏
+    （代理模型上实测评估 RMSE 先从 0.027 劣化到 0.045，约 120 回合后才恢复到 0.029）。
+    """
+    from stable_baselines3.common.callbacks import BaseCallback
+
+    class FineTuneWarmup(BaseCallback):
+        def _set_actor_trainable(self, flag: bool) -> None:
+            for p in self.model.actor.parameters():
+                p.requires_grad_(flag)
+
+        def _on_training_start(self) -> None:
+            self.grad_steps = self.model.gradient_steps
+            self.model.learning_starts = 0
+            self.model.gradient_steps = 0
+            self._set_actor_trainable(False)
+            self.phase = 0
+            print(f"[finetune] 阶段1：用预训练策略采样 {collect_steps} 步（不更新）")
+
+        def _on_step(self) -> bool:
+            if self.phase == 0 and self.num_timesteps >= collect_steps:
+                self.model.gradient_steps = self.grad_steps
+                self.phase = 1
+                print(f"[finetune] 阶段2：只更新 Critic {critic_steps} 步")
+            if self.phase == 1 and self.num_timesteps >= collect_steps + critic_steps:
+                self._set_actor_trainable(True)
+                self.phase = 2
+                print("[finetune] 阶段3：正常 SAC 更新")
+            return True
+
+        def _on_training_end(self) -> None:
+            self._set_actor_trainable(True)
+            self.model.gradient_steps = self.grad_steps
+
+    return FineTuneWarmup()
+
+
+def make_scenario_callback(
+    cfg: Config, run_dir: str, eval_env: Optional[AirfoilLiftEnv] = None, eval_at_start: bool = False
+):
+    """在固定阵风工况上评估确定性策略，按平均 Cl RMSE 保存 best_model.zip。
+
+    eval_at_start=True（加载预训练模型微调时）：训练前先评估一次作为基线，微调后的模型只有更好时才覆盖 best_model。
+    """
     from stable_baselines3.common.callbacks import BaseCallback
 
     class ScenarioEvalCallback(BaseCallback):
@@ -115,11 +163,17 @@ def make_scenario_callback(cfg: Config, run_dir: str, eval_env: Optional[Airfoil
             scen = self.env.gust_gen.standard_scenarios()
             names = list(scen)[: max(cfg.train.n_eval_episodes, 1)]
             self.scenarios = {n: scen[n] for n in names}
+            if eval_at_start:
+                self._evaluate()
 
         def _on_step(self) -> bool:
             if cfg.train.eval_freq <= 0 or self.num_timesteps - self.last_eval < cfg.train.eval_freq:
                 return True
             self.last_eval = self.num_timesteps
+            self._evaluate()
+            return True
+
+        def _evaluate(self) -> None:
             ctrl = PolicyController(self.model)
             res = {n: run_episode(self.env, ctrl, g, seed=i)["metrics"] for i, (n, g) in enumerate(self.scenarios.items())}
             rmse = float(np.mean([m["cl_rmse"] for m in res.values()]))
@@ -135,7 +189,8 @@ def make_scenario_callback(cfg: Config, run_dir: str, eval_env: Optional[Airfoil
                 self.best = rmse
                 self.model.save(os.path.join(run_dir, "best_model"))
                 print(f"[eval] step={self.num_timesteps}: 新的最佳 Cl RMSE={rmse:.5f}（return={ret:.2f}）")
-            return True
+            else:
+                print(f"[eval] step={self.num_timesteps}: Cl RMSE={rmse:.5f}（最佳 {self.best:.5f}）")
 
         def _on_training_end(self) -> None:
             if self.env is not None and eval_env is None:

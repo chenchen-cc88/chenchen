@@ -65,6 +65,7 @@ def main() -> None:
     ap.add_argument("--pid", default=None, help='PID 增益 JSON，如 \'{"kp":1.0,"ki":200,"kd":0.001,"kff":0.05}\'')
     ap.add_argument("--no-pid", action="store_true")
     ap.add_argument("--scenarios", default=None, help="逗号分隔的工况名，默认全部")
+    ap.add_argument("--n-random", type=int, default=0, help="额外评估 N 个留出的随机阵风（训练与选模都未用过）")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -108,6 +109,10 @@ def main() -> None:
     scenarios = env.gust_gen.standard_scenarios()
     if args.scenarios:
         scenarios = {k: scenarios[k] for k in args.scenarios.split(",")}
+    rng_test = np.random.default_rng(4242)
+    for i in range(args.n_random):
+        g = env.gust_gen.sample(rng_test)
+        scenarios[f"random{i:02d}_{g.kind}"] = g
 
     rows = []
     for i, (sname, gust) in enumerate(scenarios.items()):
@@ -124,22 +129,29 @@ def main() -> None:
             if c != "no_control"
         )
         print(f"{sname:18s} 无控制 RMSE={base:.4f} | {msg}")
-        plot_scenario(sname, trajs, out / f"{sname}.png", tc)
+        if not sname.startswith("random"):
+            plot_scenario(sname, trajs, out / f"{sname}.png", tc)
 
     with open(out / "metrics.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
 
-    # 汇总（各工况平均）
-    lines = ["| 控制器 | Cl RMSE | 最大偏差 | u_rms | 平均 Cd | 回报 |", "|---|---|---|---|---|---|"]
-    for cname in controllers:
-        sel = [r for r in rows if r["controller"] == cname]
-        lines.append(
-            f"| {cname} | {np.mean([r['cl_rmse'] for r in sel]):.4f} | {np.mean([r['cl_max_dev'] for r in sel]):.4f} | "
-            f"{np.mean([r['u_rms'] for r in sel]):.3f} | {np.mean([r['cd_mean'] for r in sel]):.4f} | "
-            f"{np.mean([r['return'] for r in sel]):.1f} |"
-        )
+    # 汇总（各工况平均；标准工况与留出随机工况分开统计）
+    groups = {"标准工况": [r for r in rows if not r["scenario"].startswith("random")]}
+    if args.n_random:
+        groups[f"留出随机阵风 ×{args.n_random}"] = [r for r in rows if r["scenario"].startswith("random")]
+    lines = []
+    for gname, grows in groups.items():
+        lines += [f"**{gname}**", "", "| 控制器 | Cl RMSE | 最大偏差 | u_rms | 平均 Cd | 回报 |", "|---|---|---|---|---|---|"]
+        for cname in controllers:
+            sel = [r for r in grows if r["controller"] == cname]
+            lines.append(
+                f"| {cname} | {np.mean([r['cl_rmse'] for r in sel]):.4f} | {np.mean([r['cl_max_dev'] for r in sel]):.4f} | "
+                f"{np.mean([r['u_rms'] for r in sel]):.3f} | {np.mean([r['cd_mean'] for r in sel]):.4f} | "
+                f"{np.mean([r['return'] for r in sel]):.1f} |"
+            )
+        lines.append("")
     summary = "\n".join(lines)
     (out / "summary.md").write_text(summary + "\n", encoding="utf-8")
     print("\n" + summary)

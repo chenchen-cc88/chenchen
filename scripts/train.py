@@ -27,6 +27,7 @@ from airfoil_rl.training import (  # noqa: E402
     build_vec_env,
     default_run_dir,
     load_model,
+    make_finetune_callback,
     make_scenario_callback,
 )
 
@@ -38,6 +39,7 @@ def main() -> None:
     ap.add_argument("--run-name", default=None)
     ap.add_argument("--init-model", default=None, help="从已有模型继续训练（如代理模型预训练结果）")
     ap.add_argument("--keep-hparams", action="store_true", help="加载模型时保留其原超参数（默认用当前配置覆盖）")
+    ap.add_argument("--no-warmup", action="store_true", help="微调时不使用三段式预热（见 training.make_finetune_callback）")
     args = ap.parse_args()
 
     cfg = load_config(args.config, args.set)
@@ -64,7 +66,7 @@ def main() -> None:
                 gamma=t.gamma,
             )
         model = load_model(args.init_model, t.algo, env=env, device=t.device, **overrides)
-        print(f"已加载初始模型 {args.init_model}（回放缓存为空，前 {model.learning_starts} 步只收集数据）")
+        print(f"已加载初始模型 {args.init_model}")
     else:
         model = build_model(cfg, env, run_dir)
 
@@ -79,8 +81,10 @@ def main() -> None:
             save_replay_buffer=cfg.backend == "fluent",  # Fluent 样本昂贵，保存回放缓存以便断点续训
         )
     ]
+    if args.init_model and cfg.train.algo in ("sac", "td3") and not args.no_warmup:
+        callbacks.append(make_finetune_callback(cfg.train.finetune_collect_steps, cfg.train.finetune_critic_steps))
     if cfg.train.eval_freq > 0:
-        callbacks.append(make_scenario_callback(cfg, run_dir))
+        callbacks.append(make_scenario_callback(cfg, run_dir, eval_at_start=bool(args.init_model)))
 
     try:
         model.learn(total_timesteps=cfg.train.total_timesteps, callback=CallbackList(callbacks), log_interval=4)

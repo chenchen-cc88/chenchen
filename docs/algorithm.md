@@ -82,7 +82,7 @@ $$
 * $\tilde\alpha_g$：机头/上游攻角探头读数（带 0.05° 噪声），默认 3 段历史，提供**前馈**信息；
 * $C_p$：Fluent 中的表面压力探头（可选；需与预训练时观测维度一致）；
 * $\bar e_k = \lambda \bar e_{k-1} + (1-\lambda) e_k$：归一化升力误差的指数滑动平均（时间常数 $3\,t_c$），相当于给策略提供“积分项”，
-  消除慢变阵风下的静差（没有它时，RL 在 k = 0.1 的慢正弦阵风上明显不如带积分的 PID）；
+  减小慢变阵风下的静差（代理模型实测：k = 0.1 慢正弦阵风上 RL 的 RMSE 从 0.022 降到 0.017~0.018，但仍不如带积分的 PID 的 0.010）；
 * $u_{k-i}$：最近 $n_u = 3$ 个执行器指令。动作经过平滑、执行器又有延迟，“已发出但尚未生效”的指令是系统状态的一部分，
   缺少它，策略无法区分“射流已经在起作用”与“射流还在路上”（理论上延迟系统的马尔可夫状态必须包含这部分信息）。
 
@@ -339,8 +339,24 @@ r_k, o_{k+1}  ← 由 N_s 个 Cl 计算
 1. **阶段 1**：`python scripts/train.py --config configs/surrogate.yaml`，检查奖励设计、观测、超参数是否合理；
 2. **阶段 2**：`calibrate_surrogate.py collect` 在 Fluent 上运行 8 组开环实验（射流阶跃 ±1、+0.5，阵风阶跃 ±3°/+6°，正弦阵风，PRBS 射流 + Dryden 阵风；共约 5000 个时间步），
    `fit` 用带边界的非线性最小二乘（`scipy.optimize.least_squares`）拟合代理模型参数，再用标定后的代理模型重新预训练；
-3. **阶段 3**：`train.py --config configs/fluent.yaml --init-model runs/xxx/best_model.zip`，回放池清空后在 Fluent 上继续训练；
+3. **阶段 3**：`train.py --config configs/fluent.yaml --init-model runs/xxx/best_model.zip` 在 Fluent 上继续训练；
    观测、动作、时间步必须与预训练一致（配置中 flow/control/obs 三节保持相同）。
+
+### 微调的三段式预热（重要）
+
+加载模型后回放池是空的。如果直接按 SB3 默认流程走，会出现两个问题：前 `learning_starts` 步用**均匀随机动作**采样，浪费昂贵的 CFD 样本；
+随后在很小的回放池上以较高 UTD 更新，Critic 过拟合，并把已经很好的策略带偏。在代理模型上做同环境“微调”实测：评估 RMSE 先从 0.027 劣化到 0.045，
+约 120 个回合后才恢复到 0.029，这几乎是 Fluent 上全部的微调预算。因此 `train.py` 在 `--init-model` 时自动启用三段式预热
+（`training.make_finetune_callback`）：
+
+| 阶段 | 步数（配置项） | 做法 |
+|---|---|---|
+| 1 采样 | `finetune_collect_steps` = 800（每个 Fluent 1 回合） | 用**预训练策略本身**采样，不做梯度更新 |
+| 2 Critic 适应 | `finetune_critic_steps` = 2000 | 冻结 Actor（`requires_grad=False`），只更新 Critic 与温度系数 |
+| 3 正常更新 | 其余 | 标准 SAC |
+
+同样的实验中，启用预热后评估 RMSE 始终保持在 0.0266~0.0284。另外，评估回调会在训练开始时先评估一次加载的模型作为基线，
+只有微调后更好的模型才会覆盖 `best_model.zip`。如需关闭预热，加 `--no-warmup`。
 
 也可以跳过阶段 2，直接把阶段 1 的策略放到 Fluent 上评估（`evaluate.py --run runs/xxx --config configs/fluent.yaml`）看迁移效果。
 
@@ -348,7 +364,9 @@ r_k, o_{k+1}  ← 由 N_s 个 Cl 计算
 
 ## 7. 评估指标
 
-在 5 个固定阵风工况上（正弦 k=0.1 / k=0.3、两次 1-cos 离散阵风、Dryden 连续湍流、多频正弦），比较：
+在 5 个固定阵风工况上（正弦 k=0.1 / k=0.3、两次 1-cos 离散阵风、Dryden 连续湍流、多频正弦）比较。
+训练中按这 5 个工况挑选 `best_model`，存在选择偏差，因此 `evaluate.py --n-random 20` 还会在 20 个**留出的随机阵风**上评估
+（随机种子与训练、选模都不同），这是更公平的泛化指标。比较的量：
 
 * **Cl RMSE** $=\sqrt{\overline{(C_L - C_{L,\text{ref}})^2}}$（主要指标）与相对无控制的降低百分比；
 * **最大偏差** $\max|C_L - C_{L,\text{ref}}|$（结构载荷峰值）；

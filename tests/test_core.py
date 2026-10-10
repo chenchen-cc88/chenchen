@@ -134,3 +134,18 @@ def test_sac_smoke(tmp_path: Path) -> None:
     model.save(path)
     env.close()
     assert path.is_file()
+
+    # 迁移微调路径：加载 + 三段式预热（采样 → 只更新 Critic → 正常更新）
+    from stable_baselines3.common.callbacks import CallbackList
+
+    from airfoil_rl.training import load_model, make_finetune_callback
+
+    env2 = build_vec_env(cfg, 2, 1)
+    m2 = load_model(str(path), "sac", env=env2, device="cpu", learning_starts=10)
+    actor_before = [p.detach().clone() for p in m2.actor.parameters()]
+    cb = make_finetune_callback(collect_steps=40, critic_steps=40)
+    m2.learn(60, callback=CallbackList([cb]))  # 只到阶段 2：Actor 必须保持不变
+    for a, b in zip(actor_before, m2.actor.parameters()):
+        assert np.allclose(a.numpy(), b.detach().numpy())
+    assert all(p.requires_grad for p in m2.actor.parameters())  # 训练结束后恢复
+    env2.close()
